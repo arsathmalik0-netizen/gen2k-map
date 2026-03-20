@@ -7,6 +7,7 @@ import { CampaignManager } from './campaignManager';
 import { SendingEngine } from './sendingEngine';
 import { Logger } from './logger';
 import { LoggerService } from './loggerService';
+import { QueueStorage } from './queueStorage';
 import { Campaign, LogFilter } from './types';
 
 app.commandLine.appendSwitch('enable-features', 'VaapiVideoDecoder');
@@ -21,6 +22,7 @@ let campaignManager: CampaignManager | null = null;
 let sendingEngine: SendingEngine | null = null;
 let logger: Logger | null = null;
 let enhancedLogger: LoggerService | null = null;
+let queueStorage: QueueStorage | null = null;
 
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
@@ -312,13 +314,34 @@ app.on('ready', async () => {
     campaignStorage = new CampaignStorage(app.getPath('userData'));
     campaignManager = new CampaignManager(campaignStorage, enhancedLogger);
 
+    queueStorage = new QueueStorage(app.getPath('userData'));
+
     logger = new Logger();
-    sendingEngine = new SendingEngine(campaignManager, logger, enhancedLogger);
+    sendingEngine = new SendingEngine(campaignManager, logger, enhancedLogger, queueStorage);
 
     setupIPC();
     createMainWindow();
 
     await sessionManager.restoreSessions();
+
+    const sessions = sessionManager.getAllSessions();
+    const activeSessions = sessions.filter(s => s.status === 'ACTIVE');
+    const deviceWindows = new Map();
+
+    activeSessions.forEach(session => {
+      const win = (sessionManager as any).sessions.get(session.id);
+      if (win && !win.isDestroyed()) {
+        deviceWindows.set(session.id, win);
+      }
+    });
+
+    if (deviceWindows.size > 0) {
+      enhancedLogger.info('Checking for interrupted campaigns to resume', {
+        component: 'System',
+        availableDevices: deviceWindows.size
+      });
+      await sendingEngine.resumeInterruptedCampaigns(deviceWindows);
+    }
 
     enhancedLogger.success('Application started successfully', { component: 'System' });
   } catch (error) {
