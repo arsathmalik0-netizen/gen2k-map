@@ -11,6 +11,7 @@ export class SessionManager {
   private logger: LoggerService;
   private updateCallback?: (sessions: SessionData[]) => void;
   private healthCheckIntervals: Map<string, NodeJS.Timeout> = new Map();
+  private statusDetectionIntervals: Map<string, NodeJS.Timeout> = new Map();
 
   constructor(storage: SessionStorage, logger: LoggerService) {
     this.storage = storage;
@@ -100,11 +101,25 @@ export class SessionManager {
     }
   }
 
+  private stopStatusDetection(sessionId: string): void {
+    const interval = this.statusDetectionIntervals.get(sessionId);
+    if (interval) {
+      clearInterval(interval);
+      this.statusDetectionIntervals.delete(sessionId);
+      this.logger.info('Status detection interval stopped', {
+        component: 'SessionManager',
+        deviceId: sessionId
+      });
+    }
+  }
+
   private async intelligentStatusDetection(sessionId: string): Promise<void> {
     const browserWindow = this.sessions.get(sessionId);
     const sessionInfo = this.sessionData.get(sessionId);
 
     if (!browserWindow || !sessionInfo) return;
+
+    this.stopStatusDetection(sessionId);
 
     this.logger.info('Starting intelligent status detection', {
       component: 'SessionManager',
@@ -126,6 +141,12 @@ export class SessionManager {
         attempt++;
 
         try {
+          if (browserWindow.isDestroyed()) {
+            clearInterval(checkInterval);
+            this.statusDetectionIntervals.delete(sessionId);
+            return;
+          }
+
           const title = browserWindow.webContents.getTitle();
           const url = browserWindow.webContents.getURL();
 
@@ -146,6 +167,7 @@ export class SessionManager {
 
           if (isAuthenticated && !isQRPage) {
             clearInterval(checkInterval);
+            this.statusDetectionIntervals.delete(sessionId);
             sessionInfo.status = 'ACTIVE';
             sessionInfo.lastActive = Date.now();
             this.sessionData.set(sessionId, sessionInfo);
@@ -160,6 +182,7 @@ export class SessionManager {
             });
           } else if (isQRPage && attempt > 3) {
             clearInterval(checkInterval);
+            this.statusDetectionIntervals.delete(sessionId);
             sessionInfo.status = 'QR_REQUIRED';
             this.sessionData.set(sessionId, sessionInfo);
             this.saveAllSessions();
@@ -171,6 +194,7 @@ export class SessionManager {
             });
           } else if (attempt >= maxAttempts) {
             clearInterval(checkInterval);
+            this.statusDetectionIntervals.delete(sessionId);
             sessionInfo.status = 'QR_REQUIRED';
             this.sessionData.set(sessionId, sessionInfo);
             this.saveAllSessions();
@@ -182,6 +206,8 @@ export class SessionManager {
             });
           }
         } catch (error) {
+          clearInterval(checkInterval);
+          this.statusDetectionIntervals.delete(sessionId);
           this.logger.error('Error during status detection', {
             component: 'SessionManager',
             deviceId: sessionId,
@@ -189,6 +215,8 @@ export class SessionManager {
           });
         }
       }, 2000);
+
+      this.statusDetectionIntervals.set(sessionId, checkInterval);
     } else {
       this.logger.info('No authentication data found, QR scan required', {
         component: 'SessionManager',
@@ -632,6 +660,7 @@ export class SessionManager {
     const browserWindow = this.sessions.get(sessionId);
 
     this.stopHealthCheck(sessionId);
+    this.stopStatusDetection(sessionId);
 
     if (browserWindow && !browserWindow.isDestroyed()) {
       browserWindow.removeAllListeners();
@@ -755,6 +784,10 @@ export class SessionManager {
   cleanup(): void {
     for (const sessionId of this.healthCheckIntervals.keys()) {
       this.stopHealthCheck(sessionId);
+    }
+
+    for (const sessionId of this.statusDetectionIntervals.keys()) {
+      this.stopStatusDetection(sessionId);
     }
 
     for (const [sessionId, browserWindow] of this.sessions.entries()) {

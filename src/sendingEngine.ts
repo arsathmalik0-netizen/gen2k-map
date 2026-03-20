@@ -12,12 +12,36 @@ export class SendingEngine {
   private activeCampaigns: Map<string, boolean> = new Map();
   private pausedCampaigns: Set<string> = new Set();
   private messageQueues: Map<string, MessageQueueItem[]> = new Map();
+  private deviceLocks: Map<string, Promise<void>> = new Map();
 
   constructor(campaignManager: CampaignManager, logger: Logger, enhancedLogger: LoggerService) {
     this.campaignManager = campaignManager;
     this.logger = logger;
     this.enhancedLogger = enhancedLogger;
     this.enhancedLogger.info('SendingEngine initialized', { component: 'SendingEngine' });
+  }
+
+  private async withDeviceLock<T>(
+    deviceId: string,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    while (this.deviceLocks.has(deviceId)) {
+      await this.deviceLocks.get(deviceId);
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    let releaseLock: () => void;
+    const lockPromise = new Promise<void>(resolve => {
+      releaseLock = resolve;
+    });
+    this.deviceLocks.set(deviceId, lockPromise);
+
+    try {
+      return await operation();
+    } finally {
+      this.deviceLocks.delete(deviceId);
+      releaseLock!();
+    }
   }
 
   async startCampaign(
@@ -63,8 +87,13 @@ export class SendingEngine {
   stopCampaign(campaignId: string): void {
     this.activeCampaigns.set(campaignId, false);
     this.pausedCampaigns.delete(campaignId);
+    this.messageQueues.delete(campaignId);
     this.campaignManager.updateCampaignStatus(campaignId, 'STOPPED');
     this.logger.info(`Campaign stopped`, { campaignId });
+    this.enhancedLogger.info('Campaign queue cleaned up', {
+      component: 'SendingEngine',
+      campaignId
+    });
   }
 
   private createMessageQueue(
@@ -152,7 +181,9 @@ export class SendingEngine {
         continue;
       }
 
-      await this.sendMessage(item, deviceWindow, campaignId);
+      await this.withDeviceLock(item.deviceId, async () => {
+        await this.sendMessage(item, deviceWindow, campaignId);
+      });
       this.updateCampaignStats(campaignId, queue);
 
       const delay = this.getRandomDelay(campaign.minDelay, campaign.maxDelay);
@@ -231,6 +262,7 @@ export class SendingEngine {
 
   private completeCampaign(campaignId: string): void {
     this.activeCampaigns.set(campaignId, false);
+    this.messageQueues.delete(campaignId);
     this.campaignManager.updateCampaignStatus(campaignId, 'COMPLETED');
     this.logger.success(`Campaign completed`, { campaignId });
 
@@ -241,6 +273,11 @@ export class SendingEngine {
         { campaignId }
       );
     }
+
+    this.enhancedLogger.success('Campaign queue cleaned up', {
+      component: 'SendingEngine',
+      campaignId
+    });
   }
 
   private getRandomDelay(min: number, max: number): number {

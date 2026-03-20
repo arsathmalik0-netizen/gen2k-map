@@ -7,14 +7,8 @@ module.exports = {
   rebuildConfig: {},
   makers: [
     {
-      name: '@electron-forge/maker-squirrel',
-      config: {
-        name: 'gen2k_marketing_console',
-      },
-    },
-    {
       name: '@electron-forge/maker-zip',
-      platforms: ['win32'],
+      platforms: ['darwin', 'linux', 'win32'],
     },
   ],
 };
