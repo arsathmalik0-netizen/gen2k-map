@@ -10,6 +10,7 @@ export class SessionManager {
   private storage: SessionStorage;
   private logger: LoggerService;
   private updateCallback?: (sessions: SessionData[]) => void;
+  private healthCheckIntervals: Map<string, NodeJS.Timeout> = new Map();
 
   constructor(storage: SessionStorage, logger: LoggerService) {
     this.storage = storage;
@@ -24,6 +25,179 @@ export class SessionManager {
   private notifyUpdate(): void {
     if (this.updateCallback) {
       this.updateCallback(Array.from(this.sessionData.values()));
+    }
+  }
+
+  private async verifyWhatsAppAuthentication(sessionId: string): Promise<boolean> {
+    const browserWindow = this.sessions.get(sessionId);
+    const sessionInfo = this.sessionData.get(sessionId);
+
+    if (!browserWindow || !sessionInfo) return false;
+
+    try {
+      const ses = session.fromPartition(sessionInfo.partitionName);
+      const cookies = await ses.cookies.get({ url: 'https://web.whatsapp.com' });
+
+      const hasAuthCookies = cookies.some(cookie =>
+        cookie.name.includes('wa_') ||
+        cookie.name.includes('wam') ||
+        cookie.name.includes('WABrowserId') ||
+        cookie.name.includes('WASecretBundle')
+      );
+
+      if (!sessionInfo.authState) {
+        sessionInfo.authState = {
+          lastVerified: Date.now(),
+          hasAuthCookies,
+          verificationAttempts: 1
+        };
+      } else {
+        sessionInfo.authState.lastVerified = Date.now();
+        sessionInfo.authState.hasAuthCookies = hasAuthCookies;
+        sessionInfo.authState.verificationAttempts++;
+      }
+
+      this.sessionData.set(sessionId, sessionInfo);
+
+      if (hasAuthCookies && cookies.length > 0) {
+        this.logger.info('Authentication cookies found, session should auto-login', {
+          component: 'SessionManager',
+          deviceId: sessionId,
+          metadata: { cookieCount: cookies.length }
+        });
+        return true;
+      }
+
+      const hasLocalStorage = await browserWindow.webContents.executeJavaScript(`
+        (function() {
+          try {
+            return localStorage.length > 0 &&
+                   (localStorage.getItem('WABrowserId') !== null ||
+                    localStorage.getItem('WASecretBundle') !== null ||
+                    Object.keys(localStorage).some(key => key.includes('wa') || key.includes('WA')));
+          } catch(e) {
+            return false;
+          }
+        })()
+      `).catch(() => false);
+
+      if (hasLocalStorage) {
+        this.logger.info('Authentication localStorage found, session should auto-login', {
+          component: 'SessionManager',
+          deviceId: sessionId
+        });
+        return true;
+      }
+
+      return false;
+    } catch (error) {
+      this.logger.error('Error verifying WhatsApp authentication', {
+        component: 'SessionManager',
+        deviceId: sessionId,
+        error: error instanceof Error ? error : new Error(String(error))
+      });
+      return false;
+    }
+  }
+
+  private async intelligentStatusDetection(sessionId: string): Promise<void> {
+    const browserWindow = this.sessions.get(sessionId);
+    const sessionInfo = this.sessionData.get(sessionId);
+
+    if (!browserWindow || !sessionInfo) return;
+
+    this.logger.info('Starting intelligent status detection', {
+      component: 'SessionManager',
+      deviceId: sessionId
+    });
+
+    const hasAuth = await this.verifyWhatsAppAuthentication(sessionId);
+
+    if (hasAuth) {
+      this.logger.success('Authentication verified, waiting for WhatsApp to load', {
+        component: 'SessionManager',
+        deviceId: sessionId
+      });
+
+      const maxAttempts = 15;
+      let attempt = 0;
+
+      const checkInterval = setInterval(async () => {
+        attempt++;
+
+        try {
+          const title = browserWindow.webContents.getTitle();
+          const url = browserWindow.webContents.getURL();
+
+          const isAuthenticated = title.includes('WhatsApp') &&
+                                 (title === 'WhatsApp' || /\(\d+\)/.test(title));
+
+          const isQRPage = await browserWindow.webContents.executeJavaScript(`
+            (function() {
+              try {
+                const canvas = document.querySelector('canvas[aria-label]');
+                const qrContainer = document.querySelector('[data-ref]');
+                return !!(canvas || qrContainer);
+              } catch(e) {
+                return false;
+              }
+            })()
+          `).catch(() => false);
+
+          if (isAuthenticated && !isQRPage) {
+            clearInterval(checkInterval);
+            sessionInfo.status = 'ACTIVE';
+            sessionInfo.lastActive = Date.now();
+            this.sessionData.set(sessionId, sessionInfo);
+            this.saveAllSessions();
+            this.notifyUpdate();
+            this.startHealthCheck(sessionId);
+
+            this.logger.success('Session automatically restored to ACTIVE state', {
+              component: 'SessionManager',
+              deviceId: sessionId,
+              metadata: { attempts: attempt }
+            });
+          } else if (isQRPage && attempt > 3) {
+            clearInterval(checkInterval);
+            sessionInfo.status = 'QR_REQUIRED';
+            this.sessionData.set(sessionId, sessionInfo);
+            this.saveAllSessions();
+            this.notifyUpdate();
+
+            this.logger.warning('Session requires QR authentication', {
+              component: 'SessionManager',
+              deviceId: sessionId
+            });
+          } else if (attempt >= maxAttempts) {
+            clearInterval(checkInterval);
+            sessionInfo.status = 'QR_REQUIRED';
+            this.sessionData.set(sessionId, sessionInfo);
+            this.saveAllSessions();
+            this.notifyUpdate();
+
+            this.logger.warning('Status detection timeout, defaulting to QR_REQUIRED', {
+              component: 'SessionManager',
+              deviceId: sessionId
+            });
+          }
+        } catch (error) {
+          this.logger.error('Error during status detection', {
+            component: 'SessionManager',
+            deviceId: sessionId,
+            error: error instanceof Error ? error : new Error(String(error))
+          });
+        }
+      }, 2000);
+    } else {
+      this.logger.info('No authentication data found, QR scan required', {
+        component: 'SessionManager',
+        deviceId: sessionId
+      });
+      sessionInfo.status = 'QR_REQUIRED';
+      this.sessionData.set(sessionId, sessionInfo);
+      this.saveAllSessions();
+      this.notifyUpdate();
     }
   }
 
@@ -225,11 +399,155 @@ export class SessionManager {
 
     this.saveAllSessions();
     this.notifyUpdate();
+    this.startHealthCheck(sessionId);
 
     this.logger.info(`Session transitioned to headless mode`, {
       component: 'SessionManager',
       deviceId: sessionId
     });
+  }
+
+  private startHealthCheck(sessionId: string): void {
+    if (this.healthCheckIntervals.has(sessionId)) {
+      clearInterval(this.healthCheckIntervals.get(sessionId));
+    }
+
+    const interval = setInterval(async () => {
+      await this.performHealthCheck(sessionId);
+    }, 5 * 60 * 1000);
+
+    this.healthCheckIntervals.set(sessionId, interval);
+
+    this.logger.info('Health check started for session', {
+      component: 'SessionManager',
+      deviceId: sessionId
+    });
+  }
+
+  private stopHealthCheck(sessionId: string): void {
+    const interval = this.healthCheckIntervals.get(sessionId);
+    if (interval) {
+      clearInterval(interval);
+      this.healthCheckIntervals.delete(sessionId);
+    }
+  }
+
+  private async performHealthCheck(sessionId: string): Promise<void> {
+    const browserWindow = this.sessions.get(sessionId);
+    const sessionInfo = this.sessionData.get(sessionId);
+
+    if (!browserWindow || !sessionInfo || browserWindow.isDestroyed()) {
+      this.stopHealthCheck(sessionId);
+      return;
+    }
+
+    if (sessionInfo.status !== 'ACTIVE') {
+      return;
+    }
+
+    try {
+      sessionInfo.lastHealthCheck = Date.now();
+
+      const title = browserWindow.webContents.getTitle();
+      const url = browserWindow.webContents.getURL();
+
+      const isStillAuthenticated = title.includes('WhatsApp') &&
+                                   (title === 'WhatsApp' || /\(\d+\)/.test(title));
+
+      if (!isStillAuthenticated) {
+        this.logger.warning('Health check failed, session may have been logged out', {
+          component: 'SessionManager',
+          deviceId: sessionId
+        });
+
+        await this.attemptSessionRepair(sessionId);
+      } else {
+        sessionInfo.lastActive = Date.now();
+        this.sessionData.set(sessionId, sessionInfo);
+        this.saveAllSessions();
+
+        this.logger.info('Health check passed', {
+          component: 'SessionManager',
+          deviceId: sessionId
+        });
+      }
+    } catch (error) {
+      this.logger.error('Error during health check', {
+        component: 'SessionManager',
+        deviceId: sessionId,
+        error: error instanceof Error ? error : new Error(String(error))
+      });
+    }
+  }
+
+  private async attemptSessionRepair(sessionId: string): Promise<void> {
+    const browserWindow = this.sessions.get(sessionId);
+    const sessionInfo = this.sessionData.get(sessionId);
+
+    if (!browserWindow || !sessionInfo) return;
+
+    this.logger.info('Attempting to repair session', {
+      component: 'SessionManager',
+      deviceId: sessionId
+    });
+
+    try {
+      const hasAuth = await this.verifyWhatsAppAuthentication(sessionId);
+
+      if (hasAuth) {
+        this.logger.info('Auth data still present, reloading page', {
+          component: 'SessionManager',
+          deviceId: sessionId
+        });
+
+        browserWindow.reload();
+
+        await new Promise(resolve => setTimeout(resolve, 5000));
+
+        const title = browserWindow.webContents.getTitle();
+        const isAuthenticated = title.includes('WhatsApp') &&
+                               (title === 'WhatsApp' || /\(\d+\)/.test(title));
+
+        if (isAuthenticated) {
+          sessionInfo.status = 'ACTIVE';
+          sessionInfo.lastActive = Date.now();
+          this.sessionData.set(sessionId, sessionInfo);
+          this.saveAllSessions();
+          this.notifyUpdate();
+
+          this.logger.success('Session repaired successfully', {
+            component: 'SessionManager',
+            deviceId: sessionId
+          });
+        } else {
+          this.logger.warning('Repair failed, session needs re-authentication', {
+            component: 'SessionManager',
+            deviceId: sessionId
+          });
+          sessionInfo.status = 'QR_REQUIRED';
+          this.sessionData.set(sessionId, sessionInfo);
+          this.saveAllSessions();
+          this.notifyUpdate();
+          this.stopHealthCheck(sessionId);
+        }
+      } else {
+        this.logger.warning('No auth data found, session needs QR scan', {
+          component: 'SessionManager',
+          deviceId: sessionId
+        });
+        sessionInfo.status = 'QR_REQUIRED';
+        this.sessionData.set(sessionId, sessionInfo);
+        this.saveAllSessions();
+        this.notifyUpdate();
+        this.stopHealthCheck(sessionId);
+      }
+    } catch (error) {
+      this.logger.error('Error during session repair', {
+        component: 'SessionManager',
+        deviceId: sessionId,
+        error: error instanceof Error ? error : new Error(String(error))
+      });
+    }
   }
 
   openChatWindow(sessionId: string): void {
@@ -313,6 +631,8 @@ export class SessionManager {
   deleteSession(sessionId: string): void {
     const browserWindow = this.sessions.get(sessionId);
 
+    this.stopHealthCheck(sessionId);
+
     if (browserWindow && !browserWindow.isDestroyed()) {
       browserWindow.removeAllListeners();
       browserWindow.destroy();
@@ -330,15 +650,29 @@ export class SessionManager {
   async restoreSessions(): Promise<void> {
     const savedSessions = this.storage.loadSessions();
 
+    this.logger.info(`Restoring ${savedSessions.length} saved sessions`, {
+      component: 'SessionManager'
+    });
+
     for (const sessionInfo of savedSessions) {
       try {
+        const wasActive = sessionInfo.status === 'ACTIVE';
+
+        if (wasActive) {
+          sessionInfo.status = 'RESTORING';
+          this.logger.info(`Restoring previously ACTIVE session`, {
+            component: 'SessionManager',
+            deviceId: sessionInfo.id
+          });
+        } else {
+          sessionInfo.status = 'LOADING';
+        }
+
         const browserWindow = this.createBrowserWindow(sessionInfo, false);
         this.sessions.set(sessionInfo.id, browserWindow);
         this.sessionData.set(sessionInfo.id, sessionInfo);
 
         this.setupWindowHandlers(sessionInfo.id, browserWindow);
-
-        sessionInfo.status = 'LOADING';
 
         browserWindow.webContents.on('render-process-gone', (event, details) => {
           this.logger.error(`Session render process terminated during restoration`, {
@@ -354,6 +688,12 @@ export class SessionManager {
             component: 'SessionManager',
             deviceId: sessionInfo.id
           });
+        });
+
+        browserWindow.webContents.on('did-finish-load', async () => {
+          if (wasActive) {
+            await this.intelligentStatusDetection(sessionInfo.id);
+          }
         });
 
         browserWindow.loadURL('https://web.whatsapp.com').catch(err => {
@@ -413,6 +753,10 @@ export class SessionManager {
   }
 
   cleanup(): void {
+    for (const sessionId of this.healthCheckIntervals.keys()) {
+      this.stopHealthCheck(sessionId);
+    }
+
     for (const [sessionId, browserWindow] of this.sessions.entries()) {
       if (!browserWindow.isDestroyed()) {
         browserWindow.removeAllListeners();

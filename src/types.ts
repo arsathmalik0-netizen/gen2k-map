@@ -1,4 +1,4 @@
-export type SessionStatus = 'LOADING' | 'QR_REQUIRED' | 'ACTIVE';
+export type SessionStatus = 'LOADING' | 'QR_REQUIRED' | 'ACTIVE' | 'RESTORING';
 
 export interface SessionData {
   id: string;
@@ -8,6 +8,12 @@ export interface SessionData {
   createdAt: number;
   lastActive: number;
   isVisible: boolean;
+  authState?: {
+    lastVerified: number;
+    hasAuthCookies: boolean;
+    verificationAttempts: number;
+  };
+  lastHealthCheck?: number;
 }
 
 export interface SessionMetadata {
