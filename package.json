@@ -1,0 +1,31 @@
+{
+  "name": "gen2k-marketing-console",
+  "version": "1.0.0",
+  "description": "Multi-device WhatsApp Web session manager",
+  "main": "dist/main.js",
+  "scripts": {
+    "dev": "concurrently \"tsc -w\" \"electron-forge start\"",
+    "start": "electron-forge start",
+    "build": "tsc && electron-forge make",
+    "compile": "tsc"
+  },
+  "keywords": [
+    "electron",
+    "whatsapp",
+    "session-manager"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@electron-forge/cli": "^7.5.0",
+    "@electron-forge/maker-deb": "^7.5.0",
+    "@electron-forge/maker-rpm": "^7.5.0",
+    "@electron-forge/maker-squirrel": "^7.5.0",
+    "@electron-forge/maker-zip": "^7.5.0",
+    "@types/node": "^22.13.0",
+    "concurrently": "^9.1.0",
+    "electron": "^41.0.0",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {}
+}

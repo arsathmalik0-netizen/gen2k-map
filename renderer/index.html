@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gen2K Marketing Console</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-container">
+    <header class="main-header">
+      <div class="header-content">
+        <div class="header-left">
+          <h1 class="app-title">
+            <span class="title-bracket">[</span>
+            <span class="title-main">GEN2K</span>
+            <span class="title-bracket">]</span>
+            <span class="title-sub">MARKETING CONSOLE</span>
+          </h1>
+        </div>
+        <div class="header-right">
+          <div class="header-stats">
+            <div class="stat-item">
+              <span class="stat-label">DEVICES</span>
+              <span class="stat-value" id="device-count">0</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">CAMPAIGNS</span>
+              <span class="stat-value" id="campaign-count">0</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <nav class="main-nav">
+        <button class="nav-btn active" data-tab="sessions">
+          <span class="nav-icon">▣</span>
+          <span>SESSIONS</span>
+        </button>
+        <button class="nav-btn" data-tab="campaigns">
+          <span class="nav-icon">⚡</span>
+          <span>CAMPAIGNS</span>
+        </button>
+        <button class="nav-btn" data-tab="logs">
+          <span class="nav-icon">📊</span>
+          <span>LOGS</span>
+        </button>
+      </nav>
+    </header>
+
+    <main class="main-content">
+      <div id="sessions-tab" class="tab-content active">
+        <div class="tab-header">
+          <h2 class="tab-title">
+            <span class="title-glow">⟫</span> DEVICE MANAGEMENT
+          </h2>
+          <button id="add-device-btn" class="btn btn-primary">
+            <span>+</span> ADD DEVICE
+          </button>
+        </div>
+
+        <div id="sessions-container" class="content-grid">
+          <div class="empty-state">
+            <div class="empty-icon">▣</div>
+            <p class="empty-text">NO DEVICES CONNECTED</p>
+            <p class="empty-hint">Click "ADD DEVICE" to connect your first WhatsApp account</p>
+          </div>
+        </div>
+      </div>
+
+      <div id="campaigns-tab" class="tab-content">
+        <div class="tab-header">
+          <h2 class="tab-title">
+            <span class="title-glow">⟫</span> CAMPAIGN OPERATIONS
+          </h2>
+          <button id="create-campaign-btn" class="btn btn-primary">
+            <span>+</span> CREATE CAMPAIGN
+          </button>
+        </div>
+
+        <div id="campaigns-container" class="content-grid">
+          <div class="empty-state">
+            <div class="empty-icon">⚡</div>
+            <p class="empty-text">NO CAMPAIGNS CREATED</p>
+            <p class="empty-hint">Click "CREATE CAMPAIGN" to set up your first messaging campaign</p>
+          </div>
+        </div>
+      </div>
+
+      <div id="campaign-detail-view" class="campaign-detail hidden">
+        <button id="back-to-campaigns-btn" class="btn btn-back">
+          <span>←</span> BACK TO CAMPAIGNS
+        </button>
+
+        <div class="detail-header">
+          <h2 id="detail-campaign-name" class="detail-title"></h2>
+          <div class="detail-controls">
+            <button id="start-campaign-ctrl" class="btn btn-success hidden">START</button>
+            <button id="pause-campaign-ctrl" class="btn btn-warning hidden">PAUSE</button>
+            <button id="resume-campaign-ctrl" class="btn btn-success hidden">RESUME</button>
+            <button id="stop-campaign-ctrl" class="btn btn-danger hidden">STOP</button>
+          </div>
+        </div>
+
+        <div class="stats-dashboard">
+          <div class="stat-card">
+            <div class="stat-card-label">TOTAL</div>
+            <div class="stat-card-value" id="stat-total">0</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-label">SENT</div>
+            <div class="stat-card-value stat-success" id="stat-sent">0</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-label">FAILED</div>
+            <div class="stat-card-value stat-danger" id="stat-failed">0</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-label">PENDING</div>
+            <div class="stat-card-value stat-warning" id="stat-pending">0</div>
+          </div>
+        </div>
+
+        <div class="progress-section">
+          <div class="progress-label">
+            <span>PROGRESS</span>
+            <span id="progress-percent">0%</span>
+          </div>
+          <div class="progress-bar">
+            <div id="progress-fill" class="progress-fill"></div>
+          </div>
+        </div>
+
+        <div class="log-panel">
+          <div class="log-header">
+            <span class="log-title">[ SYSTEM LOG ]</span>
+            <span class="log-status" id="log-status">IDLE</span>
+          </div>
+          <div id="log-content" class="log-content"></div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div id="campaign-modal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 class="modal-title">CREATE NEW CAMPAIGN</h3>
+        <button class="modal-close" id="close-campaign-modal">×</button>
+      </div>
+
+      <div class="modal-body">
+        <form id="campaign-form">
+          <div class="form-group">
+            <label class="form-label">Campaign Name</label>
+            <input type="text" id="campaign-name" class="form-input" placeholder="e.g., Product Launch Q1" required>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Message Template</label>
+            <textarea id="campaign-message" class="form-textarea" rows="4" placeholder="Use {placeholder} for variations" required></textarea>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Contact Numbers (one per line)</label>
+            <textarea id="campaign-contacts" class="form-textarea" rows="6" placeholder="1234567890&#10;9876543210&#10;5551234567" required></textarea>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Country Code</label>
+              <input type="text" id="campaign-country-code" class="form-input" placeholder="+1" value="+1" required>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Min Delay (seconds)</label>
+              <input type="number" id="campaign-min-delay" class="form-input" value="30" min="10" required>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Max Delay (seconds)</label>
+              <input type="number" id="campaign-max-delay" class="form-input" value="60" min="20" required>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Select Devices</label>
+            <div id="device-selector" class="device-selector">
+              <p class="empty-hint">No active devices available</p>
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button type="button" class="btn btn-secondary" id="cancel-campaign-btn">CANCEL</button>
+            <button type="submit" class="btn btn-primary">CREATE CAMPAIGN</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="logs-tab" class="tab-content">
+      <div class="tab-header">
+        <h2 class="tab-title">
+          <span class="title-glow">⟫</span> SYSTEM LOGS
+        </h2>
+        <div class="log-controls">
+          <button id="export-logs-btn" class="btn btn-secondary">
+            <span>↓</span> EXPORT
+          </button>
+          <button id="clear-logs-btn" class="btn btn-danger">
+            <span>✕</span> CLEAR
+          </button>
+        </div>
+      </div>
+
+      <div class="log-filters">
+        <select id="log-level-filter" class="filter-select">
+          <option value="">All Levels</option>
+          <option value="DEBUG">Debug</option>
+          <option value="INFO">Info</option>
+          <option value="SUCCESS">Success</option>
+          <option value="WARNING">Warning</option>
+          <option value="ERROR">Error</option>
+          <option value="CRITICAL">Critical</option>
+        </select>
+
+        <select id="log-component-filter" class="filter-select">
+          <option value="">All Components</option>
+          <option value="System">System</option>
+          <option value="SessionManager">SessionManager</option>
+          <option value="CampaignManager">CampaignManager</option>
+          <option value="SendingEngine">SendingEngine</option>
+          <option value="WhatsApp">WhatsApp</option>
+          <option value="WhatsAppSender">WhatsAppSender</option>
+          <option value="Storage">Storage</option>
+          <option value="IPC">IPC</option>
+        </select>
+
+        <input type="text" id="log-search-input" class="filter-input" placeholder="Search logs..." />
+
+        <button id="log-refresh-btn" class="btn btn-icon" title="Refresh">
+          ⟳
+        </button>
+      </div>
+
+      <div class="log-stats">
+        <div class="stat-badge">
+          <span class="badge-label">Total:</span>
+          <span id="log-stat-total">0</span>
+        </div>
+        <div class="stat-badge stat-error">
+          <span class="badge-label">Errors:</span>
+          <span id="log-stat-errors">0</span>
+        </div>
+        <div class="stat-badge stat-critical">
+          <span class="badge-label">Critical:</span>
+          <span id="log-stat-critical">0</span>
+        </div>
+        <div class="stat-badge">
+          <span class="badge-label">Rate:</span>
+          <span id="log-stat-rate">0%</span>
+        </div>
+      </div>
+
+      <div id="logs-container" class="logs-viewer">
+        <div class="empty-state">
+          <div class="empty-icon">📊</div>
+          <p class="empty-text">NO LOGS AVAILABLE</p>
+          <p class="empty-hint">Logs will appear here as the application runs</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
