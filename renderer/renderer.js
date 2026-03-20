@@ -54,7 +54,7 @@ function createSessionCard(session) {
     <div class="card-header">
       <div class="card-title">
         <span class="visibility-indicator ${visibilityClass}" title="${visibilityText}"></span>
-        DEVICE ${String(deviceNumber).padStart(3, '0')}
+        NODE-${String(deviceNumber).padStart(3, '0')}
       </div>
       <span class="status-badge ${getStatusClass(session.status)}">
         ${getStatusText(session.status)}
@@ -66,18 +66,18 @@ function createSessionCard(session) {
         <span class="info-value">${session.id.substring(0, 16)}...</span>
       </div>
       <div>
-        <span class="info-label">Created</span>
+        <span class="info-label">Initialized</span>
         <span class="info-value">${formatDate(session.createdAt)}</span>
       </div>
       <div>
-        <span class="info-label">Last Active</span>
+        <span class="info-label">Last Sync</span>
         <span class="info-value">${formatDate(session.lastActive)}</span>
       </div>
     </div>
     <div class="card-actions">
-      <button class="btn btn-secondary" onclick="openChat('${session.id}')">OPEN</button>
-      <button class="btn btn-warning" onclick="refreshSession('${session.id}')">REFRESH</button>
-      <button class="btn btn-danger" onclick="deleteSession('${session.id}')">DELETE</button>
+      <button class="btn btn-secondary" onclick="openChat('${session.id}')">ACCESS</button>
+      <button class="btn btn-warning" onclick="refreshSession('${session.id}')">SYNC</button>
+      <button class="btn btn-danger" onclick="deleteSession('${session.id}')">PURGE</button>
     </div>
   `;
 
@@ -104,27 +104,27 @@ function createCampaignCard(campaign) {
     </div>
     <div class="card-info">
       <div>
-        <span class="info-label">Total Contacts</span>
+        <span class="info-label">Total Targets</span>
         <span class="info-value">${campaign.stats.total}</span>
       </div>
       <div>
-        <span class="info-label">Sent</span>
-        <span class="info-value" style="color: var(--success-green)">${campaign.stats.sent}</span>
+        <span class="info-label">Dispatched</span>
+        <span class="info-value" style="color: var(--green-success)">${campaign.stats.sent}</span>
       </div>
       <div>
         <span class="info-label">Failed</span>
-        <span class="info-value" style="color: var(--danger-red)">${campaign.stats.failed}</span>
+        <span class="info-value" style="color: var(--magenta-error)">${campaign.stats.failed}</span>
       </div>
       <div>
-        <span class="info-label">Pending</span>
-        <span class="info-value" style="color: var(--warning-yellow)">${campaign.stats.pending}</span>
+        <span class="info-label">Queued</span>
+        <span class="info-value" style="color: var(--yellow-warning)">${campaign.stats.pending}</span>
       </div>
       <div>
-        <span class="info-label">Progress</span>
+        <span class="info-label">Completion</span>
         <span class="info-value">${completionPercent}%</span>
       </div>
       <div>
-        <span class="info-label">Created</span>
+        <span class="info-label">Initialized</span>
         <span class="info-value">${formatDate(campaign.createdAt)}</span>
       </div>
     </div>
@@ -143,8 +143,8 @@ function renderSessions() {
     container.innerHTML = `
       <div class="empty-state">
         <div class="empty-icon">▣</div>
-        <p class="empty-text">NO DEVICES CONNECTED</p>
-        <p class="empty-hint">Click "ADD DEVICE" to connect your first WhatsApp account</p>
+        <p class="empty-text">NO NODES DEPLOYED</p>
+        <p class="empty-hint">Initialize your first communication node</p>
       </div>
     `;
   } else {
@@ -167,8 +167,8 @@ function renderCampaigns() {
     container.innerHTML = `
       <div class="empty-state">
         <div class="empty-icon">⚡</div>
-        <p class="empty-text">NO CAMPAIGNS CREATED</p>
-        <p class="empty-hint">Click "CREATE CAMPAIGN" to set up your first messaging campaign</p>
+        <p class="empty-text">NO OPERATIONS ACTIVE</p>
+        <p class="empty-hint">Initialize a new tactical operation</p>
       </div>
     `;
   } else {
@@ -288,7 +288,7 @@ function updateDeviceSelector() {
     option.className = 'device-option';
     option.innerHTML = `
       <input type="checkbox" id="device-${session.id}" value="${session.id}" checked>
-      <label for="device-${session.id}">Device ${String(index + 1).padStart(3, '0')}</label>
+      <label for="device-${session.id}">NODE-${String(index + 1).padStart(3, '0')}</label>
     `;
     selector.appendChild(option);
   });
