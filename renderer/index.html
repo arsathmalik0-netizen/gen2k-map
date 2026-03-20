@@ -238,9 +238,15 @@
             <textarea id="campaign-message" class="form-textarea" rows="4" placeholder="Use {placeholder} for variations" required></textarea>
           </div>
 
+          <div class="form-group" id="variations-section" style="display: none;">
+            <label class="form-label">Message Variations</label>
+            <div id="variations-container" class="variations-container"></div>
+          </div>
+
           <div class="form-group">
             <label class="form-label">Target Contacts (one per line)</label>
             <textarea id="campaign-contacts" class="form-textarea" rows="6" placeholder="1234567890&#10;9876543210&#10;5551234567" required></textarea>
+            <div id="contact-validation-feedback" class="contact-validation-feedback"></div>
           </div>
 
           <div class="form-row">

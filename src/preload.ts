@@ -28,4 +28,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onLogUpdate: (callback: (logs: LogEntry[]) => void) => {
     ipcRenderer.on('log:updated', (event, logs) => callback(logs));
   },
+
+  getEnhancedLogs: (filters?: any) => ipcRenderer.invoke('log:enhanced:get', filters),
+  getLogStats: () => ipcRenderer.invoke('log:enhanced:stats'),
+  exportLogs: (format: string, filters?: any) => ipcRenderer.invoke('log:enhanced:export', format, filters),
+  clearLogs: (campaignId?: string) => ipcRenderer.invoke('log:enhanced:clear', campaignId),
+  cleanupOldLogs: (daysToKeep: number) => ipcRenderer.invoke('log:enhanced:cleanup', daysToKeep),
+  onEnhancedLogUpdate: (callback: (logs: any[]) => void) => {
+    ipcRenderer.on('log:enhanced:updated', (event, logs) => callback(logs));
+  },
 });

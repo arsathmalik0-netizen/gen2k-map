@@ -323,10 +323,15 @@ async function handleCampaignSubmit(e) {
     return;
   }
 
+  const variations = Object.keys(messageVariations).map(placeholder => ({
+    placeholder,
+    options: messageVariations[placeholder]
+  }));
+
   const campaignData = {
     name,
     message,
-    variations: [],
+    variations,
     contacts,
     countryCode: countryCode.startsWith('+') ? countryCode : '+' + countryCode,
     selectedDevices,
@@ -337,6 +342,7 @@ async function handleCampaignSubmit(e) {
   try {
     await window.electronAPI.createCampaign(campaignData);
     hideCampaignModal();
+    messageVariations = {};
     await loadCampaigns();
   } catch (error) {
     console.error('Error creating campaign:', error);
@@ -494,6 +500,310 @@ async function stopCampaign() {
   }
 }
 
+let messageVariations = {};
+
+function extractPlaceholders(message) {
+  const regex = /\{(\w+)\}/g;
+  const matches = [];
+  let match;
+  while ((match = regex.exec(message)) !== null) {
+    if (!matches.includes(match[1])) {
+      matches.push(match[1]);
+    }
+  }
+  return matches;
+}
+
+function renderVariationsUI() {
+  const message = document.getElementById('campaign-message').value;
+  const placeholders = extractPlaceholders(message);
+  const variationsSection = document.getElementById('variations-section');
+  const variationsContainer = document.getElementById('variations-container');
+
+  if (placeholders.length === 0) {
+    variationsSection.style.display = 'none';
+    messageVariations = {};
+    return;
+  }
+
+  variationsSection.style.display = 'block';
+  variationsContainer.innerHTML = '';
+
+  placeholders.forEach(placeholder => {
+    if (!messageVariations[placeholder]) {
+      messageVariations[placeholder] = [];
+    }
+
+    const section = document.createElement('div');
+    section.className = 'variation-section';
+    section.innerHTML = `
+      <div class="variation-section-header">
+        <span class="variation-placeholder-name">{${placeholder}}</span>
+      </div>
+      <div class="variation-input-group">
+        <input type="text" class="variation-input" id="variation-input-${placeholder}" placeholder="Add variation..." />
+        <button type="button" class="btn-add-variation" onclick="addVariation('${placeholder}')">ADD</button>
+      </div>
+      <div class="variation-list" id="variation-list-${placeholder}"></div>
+    `;
+    variationsContainer.appendChild(section);
+
+    renderVariationList(placeholder);
+
+    const input = document.getElementById(`variation-input-${placeholder}`);
+    input.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        addVariation(placeholder);
+      }
+    });
+  });
+}
+
+function addVariation(placeholder) {
+  const input = document.getElementById(`variation-input-${placeholder}`);
+  const value = input.value.trim();
+
+  if (value === '') return;
+
+  if (!messageVariations[placeholder]) {
+    messageVariations[placeholder] = [];
+  }
+
+  if (messageVariations[placeholder].includes(value)) {
+    alert('This variation already exists');
+    return;
+  }
+
+  messageVariations[placeholder].push(value);
+  input.value = '';
+  renderVariationList(placeholder);
+}
+
+function removeVariation(placeholder, value) {
+  if (messageVariations[placeholder]) {
+    messageVariations[placeholder] = messageVariations[placeholder].filter(v => v !== value);
+    renderVariationList(placeholder);
+  }
+}
+
+function renderVariationList(placeholder) {
+  const listContainer = document.getElementById(`variation-list-${placeholder}`);
+  if (!listContainer) return;
+
+  const variations = messageVariations[placeholder] || [];
+
+  if (variations.length === 0) {
+    listContainer.innerHTML = '<p class="empty-hint" style="font-size: 10px; margin: 8px 0;">No variations added yet</p>';
+    return;
+  }
+
+  listContainer.innerHTML = '';
+  variations.forEach(variation => {
+    const chip = document.createElement('div');
+    chip.className = 'variation-chip';
+    chip.innerHTML = `
+      <span class="variation-chip-text">${variation}</span>
+      <button type="button" class="variation-chip-remove" onclick="removeVariation('${placeholder}', '${variation}')">×</button>
+    `;
+    listContainer.appendChild(chip);
+  });
+}
+
+function debounce(func, wait) {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+}
+
+function isValidPhoneNumber(number) {
+  const cleaned = number.replace(/[^0-9]/g, '');
+  return cleaned.length >= 7 && cleaned.length <= 15;
+}
+
+function validateAndCountContacts() {
+  const contactsText = document.getElementById('campaign-contacts').value;
+  const feedback = document.getElementById('contact-validation-feedback');
+
+  if (!contactsText.trim()) {
+    feedback.innerHTML = '';
+    return;
+  }
+
+  const lines = contactsText.split('\n').map(line => line.trim()).filter(line => line);
+  const validNumbers = [];
+  const invalidNumbers = [];
+
+  lines.forEach(line => {
+    const cleaned = line.replace(/[^0-9]/g, '');
+    if (isValidPhoneNumber(cleaned)) {
+      validNumbers.push(cleaned);
+    } else if (cleaned) {
+      invalidNumbers.push(cleaned);
+    }
+  });
+
+  const uniqueValid = new Set(validNumbers);
+  const duplicates = validNumbers.length - uniqueValid.size;
+
+  feedback.innerHTML = `
+    <div class="validation-stat stat-valid">
+      <span class="validation-stat-label">Valid:</span>
+      <span class="validation-stat-value">${uniqueValid.size}</span>
+    </div>
+    ${invalidNumbers.length > 0 ? `
+      <div class="validation-stat stat-invalid">
+        <span class="validation-stat-label">Invalid:</span>
+        <span class="validation-stat-value">${invalidNumbers.length}</span>
+      </div>
+    ` : ''}
+    ${duplicates > 0 ? `
+      <div class="validation-stat stat-duplicate">
+        <span class="validation-stat-label">Duplicates:</span>
+        <span class="validation-stat-value">${duplicates}</span>
+      </div>
+    ` : ''}
+  `;
+}
+
+let enhancedLogs = [];
+let logFilters = {
+  level: '',
+  component: '',
+  search: ''
+};
+
+async function loadEnhancedLogs(filters = {}) {
+  try {
+    const logs = await window.electronAPI.getEnhancedLogs(filters);
+    enhancedLogs = logs || [];
+    renderEnhancedLogs(enhancedLogs);
+    await updateLogStats();
+  } catch (error) {
+    console.error('Error loading enhanced logs:', error);
+    enhancedLogs = [];
+    renderEnhancedLogs([]);
+  }
+}
+
+function renderEnhancedLogs(logEntries) {
+  const logsContainer = document.getElementById('logs-container');
+
+  if (!logEntries || logEntries.length === 0) {
+    logsContainer.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">▤</div>
+        <p class="empty-text">NO LOGS AVAILABLE</p>
+        <p class="empty-hint">System logs will appear as operations execute</p>
+      </div>
+    `;
+    return;
+  }
+
+  logsContainer.innerHTML = '';
+  logEntries.forEach(log => {
+    const entry = document.createElement('div');
+    const levelClass = `log-entry-${log.level.toLowerCase()}`;
+    entry.className = `log-entry ${levelClass}`;
+
+    let metaHtml = '';
+    if (log.component || log.campaignId || log.deviceId) {
+      metaHtml = '<div class="log-meta">';
+      if (log.component) {
+        metaHtml += `<span class="log-component">${log.component}</span>`;
+      }
+      if (log.campaignId) {
+        metaHtml += `<span class="log-campaign">Campaign: ${log.campaignId.substring(0, 8)}</span>`;
+      }
+      if (log.deviceId) {
+        metaHtml += `<span class="log-device">Device: ${log.deviceId.substring(0, 8)}</span>`;
+      }
+      metaHtml += '</div>';
+    }
+
+    entry.innerHTML = `
+      <span class="log-timestamp">${formatTime(log.timestamp)}</span>
+      <span>${log.message}</span>
+      ${metaHtml}
+    `;
+    logsContainer.appendChild(entry);
+  });
+
+  logsContainer.scrollTop = logsContainer.scrollHeight;
+}
+
+async function updateLogStats() {
+  try {
+    const stats = await window.electronAPI.getLogStats();
+    document.getElementById('log-stat-total').textContent = stats.total || 0;
+    document.getElementById('log-stat-errors').textContent = stats.errors || 0;
+    document.getElementById('log-stat-critical').textContent = stats.critical || 0;
+
+    const successRate = stats.total > 0
+      ? Math.round(((stats.total - stats.errors - stats.critical) / stats.total) * 100)
+      : 0;
+    document.getElementById('log-stat-rate').textContent = `${successRate}%`;
+  } catch (error) {
+    console.error('Error updating log stats:', error);
+  }
+}
+
+async function exportLogs() {
+  try {
+    const format = 'json';
+    const data = await window.electronAPI.exportLogs(format, logFilters);
+
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `gen2k-logs-${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    console.error('Error exporting logs:', error);
+    alert('Failed to export logs');
+  }
+}
+
+async function clearLogs() {
+  if (!confirm('Clear all logs? This cannot be undone.')) {
+    return;
+  }
+
+  try {
+    await window.electronAPI.clearLogs();
+    await loadEnhancedLogs(logFilters);
+  } catch (error) {
+    console.error('Error clearing logs:', error);
+    alert('Failed to clear logs');
+  }
+}
+
+function handleLogFilterChange() {
+  logFilters.level = document.getElementById('log-level-filter').value;
+  logFilters.component = document.getElementById('log-component-filter').value;
+  logFilters.search = document.getElementById('log-search-input').value;
+
+  loadEnhancedLogs(logFilters);
+}
+
+function switchTabExtended(tabName) {
+  switchTab(tabName);
+
+  if (tabName === 'logs') {
+    loadEnhancedLogs(logFilters);
+  }
+}
+
 document.getElementById('add-device-btn').addEventListener('click', addDevice);
 document.getElementById('create-campaign-btn').addEventListener('click', showCampaignModal);
 document.getElementById('close-campaign-modal').addEventListener('click', hideCampaignModal);
@@ -501,7 +811,7 @@ document.getElementById('cancel-campaign-btn').addEventListener('click', hideCam
 document.getElementById('campaign-form').addEventListener('submit', handleCampaignSubmit);
 
 document.querySelectorAll('.nav-btn').forEach(btn => {
-  btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+  btn.addEventListener('click', () => switchTabExtended(btn.dataset.tab));
 });
 
 document.getElementById('back-to-campaigns-btn').addEventListener('click', backToCampaigns);
@@ -509,6 +819,16 @@ document.getElementById('start-campaign-ctrl').addEventListener('click', startCa
 document.getElementById('pause-campaign-ctrl').addEventListener('click', pauseCampaign);
 document.getElementById('resume-campaign-ctrl').addEventListener('click', resumeCampaign);
 document.getElementById('stop-campaign-ctrl').addEventListener('click', stopCampaign);
+
+document.getElementById('campaign-message').addEventListener('input', renderVariationsUI);
+document.getElementById('campaign-contacts').addEventListener('input', debounce(validateAndCountContacts, 500));
+
+document.getElementById('export-logs-btn').addEventListener('click', exportLogs);
+document.getElementById('clear-logs-btn').addEventListener('click', clearLogs);
+document.getElementById('log-refresh-btn').addEventListener('click', () => loadEnhancedLogs(logFilters));
+document.getElementById('log-level-filter').addEventListener('change', handleLogFilterChange);
+document.getElementById('log-component-filter').addEventListener('change', handleLogFilterChange);
+document.getElementById('log-search-input').addEventListener('input', debounce(handleLogFilterChange, 500));
 
 window.electronAPI.onSessionUpdate((updatedSessions) => {
   sessions = updatedSessions;
@@ -532,6 +852,13 @@ window.electronAPI.onLogUpdate((updatedLogs) => {
   if (currentCampaignId) {
     const campaignLogs = updatedLogs.filter(log => log.campaignId === currentCampaignId);
     renderLogs(campaignLogs);
+  }
+});
+
+window.electronAPI.onEnhancedLogUpdate((updatedLogs) => {
+  const activeTab = document.querySelector('.tab-content.active');
+  if (activeTab && activeTab.id === 'logs-tab') {
+    loadEnhancedLogs(logFilters);
   }
 });
 
