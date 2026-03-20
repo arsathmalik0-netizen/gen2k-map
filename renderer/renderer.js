@@ -182,7 +182,10 @@ function renderCampaigns() {
 
 async function addDevice() {
   try {
-    await window.electronAPI.addSession();
+    const result = await window.electronAPI.addSession();
+    if (result && !result.success) {
+      alert(result.error || 'Failed to add device');
+    }
   } catch (error) {
     console.error('Error adding device:', error);
     alert('Failed to add device');
@@ -195,7 +198,10 @@ async function deleteSession(sessionId) {
   }
 
   try {
-    await window.electronAPI.deleteSession(sessionId);
+    const result = await window.electronAPI.deleteSession(sessionId);
+    if (result && !result.success) {
+      alert(result.error || 'Failed to delete device');
+    }
   } catch (error) {
     console.error('Error deleting session:', error);
     alert('Failed to delete device');
@@ -204,7 +210,10 @@ async function deleteSession(sessionId) {
 
 async function openChat(sessionId) {
   try {
-    await window.electronAPI.openChat(sessionId);
+    const result = await window.electronAPI.openChat(sessionId);
+    if (result && !result.success) {
+      alert(result.error || 'Failed to open chat window');
+    }
   } catch (error) {
     console.error('Error opening chat:', error);
     alert('Failed to open chat window');
@@ -213,7 +222,10 @@ async function openChat(sessionId) {
 
 async function refreshSession(sessionId) {
   try {
-    await window.electronAPI.refreshSession(sessionId);
+    const result = await window.electronAPI.refreshSession(sessionId);
+    if (result && !result.success) {
+      alert(result.error || 'Failed to refresh session');
+    }
   } catch (error) {
     console.error('Error refreshing session:', error);
     alert('Failed to refresh session');
@@ -304,6 +316,16 @@ async function handleCampaignSubmit(e) {
   const minDelay = parseInt(document.getElementById('campaign-min-delay').value) * 1000;
   const maxDelay = parseInt(document.getElementById('campaign-max-delay').value) * 1000;
 
+  if (minDelay > maxDelay) {
+    alert('Min delay must be less than or equal to max delay');
+    return;
+  }
+
+  if (minDelay < 0 || maxDelay < 0) {
+    alert('Delays must be positive numbers');
+    return;
+  }
+
   const contacts = contactsText
     .split('\n')
     .map(line => line.trim().replace(/[^0-9]/g, ''))
@@ -325,7 +347,7 @@ async function handleCampaignSubmit(e) {
 
   const variations = Object.keys(messageVariations).map(placeholder => ({
     placeholder,
-    options: messageVariations[placeholder]
+    variations: messageVariations[placeholder]
   }));
 
   const campaignData = {
@@ -340,7 +362,11 @@ async function handleCampaignSubmit(e) {
   };
 
   try {
-    await window.electronAPI.createCampaign(campaignData);
+    const result = await window.electronAPI.createCampaign(campaignData);
+    if (result && !result.success) {
+      alert(result.error || 'Failed to create campaign');
+      return;
+    }
     hideCampaignModal();
     messageVariations = {};
     await loadCampaigns();
@@ -456,7 +482,10 @@ async function startCampaign() {
   }
 
   try {
-    await window.electronAPI.startCampaign(currentCampaignId);
+    const result = await window.electronAPI.startCampaign(currentCampaignId);
+    if (result && !result.success) {
+      alert(result.error || 'Failed to start campaign');
+    }
   } catch (error) {
     console.error('Error starting campaign:', error);
     alert('Failed to start campaign: ' + error.message);
@@ -467,7 +496,10 @@ async function pauseCampaign() {
   if (!currentCampaignId) return;
 
   try {
-    await window.electronAPI.pauseCampaign(currentCampaignId);
+    const result = await window.electronAPI.pauseCampaign(currentCampaignId);
+    if (result && !result.success) {
+      alert(result.error || 'Failed to pause campaign');
+    }
   } catch (error) {
     console.error('Error pausing campaign:', error);
     alert('Failed to pause campaign');
@@ -478,7 +510,10 @@ async function resumeCampaign() {
   if (!currentCampaignId) return;
 
   try {
-    await window.electronAPI.resumeCampaign(currentCampaignId);
+    const result = await window.electronAPI.resumeCampaign(currentCampaignId);
+    if (result && !result.success) {
+      alert(result.error || 'Failed to resume campaign');
+    }
   } catch (error) {
     console.error('Error resuming campaign:', error);
     alert('Failed to resume campaign');
@@ -493,7 +528,10 @@ async function stopCampaign() {
   }
 
   try {
-    await window.electronAPI.stopCampaign(currentCampaignId);
+    const result = await window.electronAPI.stopCampaign(currentCampaignId);
+    if (result && !result.success) {
+      alert(result.error || 'Failed to stop campaign');
+    }
   } catch (error) {
     console.error('Error stopping campaign:', error);
     alert('Failed to stop campaign');
