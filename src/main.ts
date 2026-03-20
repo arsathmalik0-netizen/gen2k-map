@@ -8,6 +8,7 @@ import { SendingEngine } from './sendingEngine';
 import { Logger } from './logger';
 import { LoggerService } from './loggerService';
 import { QueueStorage } from './queueStorage';
+import { ContactHistory } from './contactHistory';
 import { Campaign, LogFilter } from './types';
 
 app.commandLine.appendSwitch('enable-features', 'VaapiVideoDecoder');
@@ -23,6 +24,7 @@ let sendingEngine: SendingEngine | null = null;
 let logger: Logger | null = null;
 let enhancedLogger: LoggerService | null = null;
 let queueStorage: QueueStorage | null = null;
+let contactHistory: ContactHistory | null = null;
 
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
@@ -82,9 +84,11 @@ function setupIPC(): void {
 
   ipcMain.handle('session:delete', safeIPCHandler('session:delete', (event: any, sessionId: string) => {
     if (!sessionManager) throw new Error('SessionManager not initialized');
+    if (!sendingEngine) throw new Error('SendingEngine not initialized');
     if (!sessionId || typeof sessionId !== 'string') {
       throw new Error('Invalid session ID');
     }
+    sendingEngine.handleDeviceRemoved(sessionId);
     sessionManager.deleteSession(sessionId);
     return { deleted: sessionId };
   }));
@@ -316,8 +320,10 @@ app.on('ready', async () => {
 
     queueStorage = new QueueStorage(app.getPath('userData'));
 
+    contactHistory = new ContactHistory(app.getPath('userData'), enhancedLogger);
+
     logger = new Logger();
-    sendingEngine = new SendingEngine(campaignManager, logger, enhancedLogger, queueStorage);
+    sendingEngine = new SendingEngine(campaignManager, logger, enhancedLogger, queueStorage, contactHistory);
 
     setupIPC();
     createMainWindow();
@@ -365,16 +371,35 @@ app.on('activate', () => {
   }
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', async (event) => {
   if (enhancedLogger) {
-    enhancedLogger.info('Application shutting down', { component: 'System' });
+    enhancedLogger.info('Application shutting down gracefully', { component: 'System' });
   }
 
-  if (sessionManager) {
-    sessionManager.cleanup();
-  }
+  if (sendingEngine) {
+    event.preventDefault();
 
-  if (enhancedLogger) {
-    enhancedLogger.cleanup();
+    enhancedLogger?.info('Pausing active campaigns before shutdown', { component: 'System' });
+    sendingEngine.cleanup();
+
+    setTimeout(() => {
+      if (sessionManager) {
+        sessionManager.cleanup();
+      }
+
+      if (enhancedLogger) {
+        enhancedLogger.cleanup();
+      }
+
+      app.exit(0);
+    }, 1000);
+  } else {
+    if (sessionManager) {
+      sessionManager.cleanup();
+    }
+
+    if (enhancedLogger) {
+      enhancedLogger.cleanup();
+    }
   }
 });

@@ -5,6 +5,7 @@ import { Logger } from './logger';
 import { LoggerService } from './loggerService';
 import { CampaignManager } from './campaignManager';
 import { QueueStorage } from './queueStorage';
+import { ContactHistory } from './contactHistory';
 
 interface DeviceLock {
   promise: Promise<void>;
@@ -20,6 +21,14 @@ interface DeviceHealth {
   pausedUntil?: number;
   totalSent: number;
   totalFailed: number;
+  hourlyMessageCount: number;
+  hourlyResetTime: number;
+}
+
+interface NetworkState {
+  isOnline: boolean;
+  lastCheck: number;
+  checkInterval: NodeJS.Timeout | null;
 }
 
 export class SendingEngine {
@@ -27,6 +36,7 @@ export class SendingEngine {
   private logger: Logger;
   private enhancedLogger: LoggerService;
   private queueStorage: QueueStorage;
+  private contactHistory: ContactHistory;
   private activeCampaigns: Map<string, boolean> = new Map();
   private pausedCampaigns: Set<string> = new Set();
   private messageQueues: Map<string, MessageQueueItem[]> = new Map();
@@ -35,19 +45,30 @@ export class SendingEngine {
   private statsBatchCounter: Map<string, number> = new Map();
   private lockTimeoutMs = 60000;
   private lockAcquireTimeoutMs = 30000;
+  private networkState: NetworkState = {
+    isOnline: true,
+    lastCheck: Date.now(),
+    checkInterval: null
+  };
+  private maxMessagesPerHour = 50;
+  private deviceWindowRefs: Map<string, BrowserWindow> = new Map();
+  private campaignDeviceRefs: Map<string, Map<string, BrowserWindow>> = new Map();
 
   constructor(
     campaignManager: CampaignManager,
     logger: Logger,
     enhancedLogger: LoggerService,
-    queueStorage: QueueStorage
+    queueStorage: QueueStorage,
+    contactHistory: ContactHistory
   ) {
     this.campaignManager = campaignManager;
     this.logger = logger;
     this.enhancedLogger = enhancedLogger;
     this.queueStorage = queueStorage;
+    this.contactHistory = contactHistory;
     this.enhancedLogger.info('SendingEngine initialized', { component: 'SendingEngine' });
     this.startLockMonitoring();
+    this.startNetworkMonitoring();
   }
 
   private startLockMonitoring(): void {
@@ -65,6 +86,111 @@ export class SendingEngine {
         }
       }
     }, 5000);
+  }
+
+  private startNetworkMonitoring(): void {
+    this.networkState.checkInterval = setInterval(async () => {
+      const wasOnline = this.networkState.isOnline;
+      this.networkState.isOnline = await this.checkNetworkStatus();
+      this.networkState.lastCheck = Date.now();
+
+      if (wasOnline && !this.networkState.isOnline) {
+        this.enhancedLogger.warning('Network disconnected, pausing all active campaigns', {
+          component: 'SendingEngine'
+        });
+        this.pauseAllCampaignsOnNetworkLoss();
+      } else if (!wasOnline && this.networkState.isOnline) {
+        this.enhancedLogger.info('Network reconnected', {
+          component: 'SendingEngine'
+        });
+      }
+    }, 10000);
+  }
+
+  private async checkNetworkStatus(): Promise<boolean> {
+    try {
+      const response = await fetch('https://www.google.com/generate_204', {
+        method: 'HEAD',
+        cache: 'no-cache',
+        signal: AbortSignal.timeout(5000)
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  private pauseAllCampaignsOnNetworkLoss(): void {
+    for (const [campaignId, isActive] of this.activeCampaigns.entries()) {
+      if (isActive && !this.pausedCampaigns.has(campaignId)) {
+        this.pausedCampaigns.add(campaignId);
+        this.campaignManager.updateCampaignStatus(campaignId, 'PAUSED');
+        this.logger.warning('Campaign auto-paused due to network loss', { campaignId });
+      }
+    }
+  }
+
+  cleanup(): void {
+    if (this.networkState.checkInterval) {
+      clearInterval(this.networkState.checkInterval);
+      this.networkState.checkInterval = null;
+    }
+
+    for (const [campaignId, isActive] of this.activeCampaigns.entries()) {
+      if (isActive) {
+        this.pauseCampaign(campaignId);
+      }
+    }
+
+    this.enhancedLogger.info('SendingEngine cleaned up', { component: 'SendingEngine' });
+  }
+
+  handleDeviceRemoved(deviceId: string): void {
+    this.enhancedLogger.warning('Device removed, redistributing messages', {
+      component: 'SendingEngine',
+      deviceId
+    });
+
+    this.deviceLocks.delete(deviceId);
+    this.deviceHealth.delete(deviceId);
+    this.deviceWindowRefs.delete(deviceId);
+
+    for (const [campaignId, deviceWindows] of this.campaignDeviceRefs.entries()) {
+      if (deviceWindows.has(deviceId)) {
+        deviceWindows.delete(deviceId);
+
+        const queue = this.messageQueues.get(campaignId);
+        if (queue && deviceWindows.size > 0) {
+          const pendingForDevice = queue.filter(
+            item => item.deviceId === deviceId && (item.status === 'PENDING' || item.status === 'SENDING')
+          );
+
+          if (pendingForDevice.length > 0) {
+            const availableDevices = Array.from(deviceWindows.keys());
+            pendingForDevice.forEach((item, index) => {
+              const newDeviceId = availableDevices[index % availableDevices.length];
+              item.deviceId = newDeviceId;
+              item.status = 'PENDING';
+              this.enhancedLogger.info('Message redistributed to another device', {
+                component: 'SendingEngine',
+                campaignId,
+                oldDevice: deviceId,
+                newDevice: newDeviceId,
+                contact: item.contact
+              });
+            });
+
+            this.queueStorage.saveQueue(campaignId, queue);
+          }
+        } else if (deviceWindows.size === 0) {
+          this.enhancedLogger.error('No devices left, pausing campaign', {
+            component: 'SendingEngine',
+            campaignId
+          });
+          this.pauseCampaign(campaignId);
+        }
+      }
+    }
   }
 
   private async withDeviceLock<T>(
@@ -108,9 +234,42 @@ export class SendingEngine {
         consecutiveFailures: 0,
         isPaused: false,
         totalSent: 0,
-        totalFailed: 0
+        totalFailed: 0,
+        hourlyMessageCount: 0,
+        hourlyResetTime: Date.now() + 3600000
       });
     }
+  }
+
+  private checkAndUpdateRateLimit(deviceId: string): boolean {
+    const health = this.deviceHealth.get(deviceId);
+    if (!health) return true;
+
+    const now = Date.now();
+    if (now >= health.hourlyResetTime) {
+      health.hourlyMessageCount = 0;
+      health.hourlyResetTime = now + 3600000;
+      this.enhancedLogger.info('Hourly rate limit reset', {
+        component: 'SendingEngine',
+        deviceId
+      });
+    }
+
+    if (health.hourlyMessageCount >= this.maxMessagesPerHour) {
+      const waitTime = health.hourlyResetTime - now;
+      this.enhancedLogger.warning('Device rate limit reached', {
+        component: 'SendingEngine',
+        deviceId,
+        metadata: {
+          messagesThisHour: health.hourlyMessageCount,
+          waitTimeMinutes: Math.ceil(waitTime / 60000)
+        }
+      });
+      return false;
+    }
+
+    health.hourlyMessageCount++;
+    return true;
   }
 
   private isDeviceHealthy(deviceId: string): boolean {
@@ -181,9 +340,20 @@ export class SendingEngine {
       throw new Error(`Campaign ${campaignId} is already running`);
     }
 
-    deviceWindows.forEach((_, deviceId) => {
+    if (deviceWindows.size === 0) {
+      throw new Error('No devices available for campaign');
+    }
+
+    if (campaign.contacts.length === 0) {
+      throw new Error('Campaign has no contacts');
+    }
+
+    deviceWindows.forEach((window, deviceId) => {
       this.initializeDeviceHealth(deviceId);
+      this.deviceWindowRefs.set(deviceId, window);
     });
+
+    this.campaignDeviceRefs.set(campaignId, new Map(deviceWindows));
 
     this.activeCampaigns.set(campaignId, true);
     this.campaignManager.updateCampaignStatus(campaignId, 'RUNNING');
@@ -286,13 +456,42 @@ export class SendingEngine {
       throw new Error('No valid devices selected for campaign');
     }
 
-    campaign.contacts.forEach((contact, index) => {
+    const uniqueContacts = this.contactHistory.removeDuplicates(campaign.contacts);
+
+    const fullNumbers = uniqueContacts.map(contact => campaign.countryCode + contact);
+
+    const { unsent, duplicates, duplicateDetails } = this.contactHistory.filterUnsentContacts(fullNumbers);
+
+    if (duplicates.length > 0) {
+      this.enhancedLogger.warning('Duplicate contacts detected and skipped', {
+        component: 'SendingEngine',
+        campaignId: campaign.id,
+        metadata: {
+          duplicateCount: duplicates.length,
+          examples: duplicates.slice(0, 5)
+        }
+      });
+    }
+
+    const seenInCampaign = new Set<string>();
+
+    unsent.forEach((fullNumber, index) => {
+      if (seenInCampaign.has(fullNumber)) {
+        this.enhancedLogger.warning('Duplicate within campaign skipped', {
+          component: 'SendingEngine',
+          campaignId: campaign.id,
+          contact: fullNumber
+        });
+        return;
+      }
+
+      seenInCampaign.add(fullNumber);
+
       const deviceId = devices[index % devices.length];
       const personalizedMessage = this.personalizeMessage(campaign.message, campaign.variations);
-      const fullNumber = campaign.countryCode + contact;
 
       queue.push({
-        id: `msg-${Date.now()}-${index}`,
+        id: `msg-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 9)}`,
         campaignId: campaign.id,
         contact: fullNumber,
         message: personalizedMessage,
@@ -300,6 +499,20 @@ export class SendingEngine {
         status: 'PENDING',
         attempts: 0,
       });
+    });
+
+    if (queue.length === 0 && campaign.contacts.length > 0) {
+      throw new Error('All contacts have already been contacted in previous campaigns');
+    }
+
+    this.enhancedLogger.info('Message queue created', {
+      component: 'SendingEngine',
+      campaignId: campaign.id,
+      metadata: {
+        totalContacts: campaign.contacts.length,
+        queueSize: queue.length,
+        duplicatesSkipped: duplicates.length
+      }
     });
 
     return queue;
@@ -313,8 +526,21 @@ export class SendingEngine {
       if (varList.length > 0) {
         const randomVariation = varList[Math.floor(Math.random() * varList.length)];
         message = message.replace(new RegExp(`\\{${placeholder}\\}`, 'g'), randomVariation);
+      } else {
+        message = message.replace(new RegExp(`\\{${placeholder}\\}`, 'g'), '');
       }
     });
+
+    const unreplacedPlaceholders = message.match(/\{(\w+)\}/g);
+    if (unreplacedPlaceholders) {
+      this.enhancedLogger.warning('Unreplaced placeholders found in message', {
+        component: 'SendingEngine',
+        metadata: { placeholders: unreplacedPlaceholders }
+      });
+      unreplacedPlaceholders.forEach(placeholder => {
+        message = message.replace(new RegExp(placeholder.replace(/[{}]/g, '\\$&'), 'g'), '');
+      });
+    }
 
     return message;
   }
@@ -332,6 +558,15 @@ export class SendingEngine {
     let messagesSinceCheckpoint = 0;
 
     while (this.activeCampaigns.get(campaignId)) {
+      if (!this.networkState.isOnline) {
+        this.enhancedLogger.warning('Network offline, pausing campaign processing', {
+          component: 'SendingEngine',
+          campaignId
+        });
+        await this.delay(10000);
+        continue;
+      }
+
       if (this.pausedCampaigns.has(campaignId)) {
         await this.delay(1000);
         continue;
@@ -347,7 +582,10 @@ export class SendingEngine {
       }
 
       const healthyDevices = Array.from(deviceWindows.keys()).filter(deviceId =>
-        this.isDeviceHealthy(deviceId) && deviceWindows.get(deviceId) && !deviceWindows.get(deviceId)!.isDestroyed()
+        this.isDeviceHealthy(deviceId) &&
+        this.checkAndUpdateRateLimit(deviceId) &&
+        deviceWindows.get(deviceId) &&
+        !deviceWindows.get(deviceId)!.isDestroyed()
       );
 
       if (healthyDevices.length === 0) {
@@ -376,10 +614,12 @@ export class SendingEngine {
       const deviceWindow = deviceWindows.get(item.deviceId);
 
       if (!deviceWindow || deviceWindow.isDestroyed()) {
-        this.logger.error(`Device ${item.deviceId} not available`, {
+        this.enhancedLogger.error('Device window destroyed, redistributing', {
+          component: 'SendingEngine',
           campaignId,
-          deviceId: item.deviceId,
+          deviceId: item.deviceId
         });
+        item.status = 'PENDING';
         continue;
       }
 
@@ -442,6 +682,7 @@ export class SendingEngine {
 
       item.status = 'SENT';
       this.recordDeviceSuccess(item.deviceId);
+      this.contactHistory.addContact(item.contact, campaignId, item.deviceId);
       this.logger.success(`Message sent successfully to ${item.contact}`, {
         campaignId,
         deviceId: item.deviceId,
